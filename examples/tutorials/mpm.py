@@ -1,3 +1,7 @@
+import os
+# Force JIT to compile for your RTX 5090 (SM 8.9)
+os.environ["TORCH_USE_CUDA_DSA"] = "1"
+
 import genesis as gs
 
 ########################## init ##########################
