@@ -348,62 +348,154 @@ class AvatarOptions(Options):
     max_dynamic_constraints: int = 8
 
 
+# class MPMOptions(Options):
+#     """
+#     Options configuring the MPMSolver.
+
+#     Note
+#     ----
+#     MPM is a hybrid lagrangian-eulerian method for simulating soft materials. In the eulerian phase, it uses a grid representation. The `upper_bound` and `lower_bound` specify the simulation domain, but a safety padding will be added to the actual grid boundary. Therefore, the actual boundary could be slightly tighter than the specified one. Note that the size of the domain affects the performance of the simulation, hence you should set it as tight as possible.
+
+#     `use_sparse_grid` and `leaf_block_size` are advanced parameters for sparse computation. Don't touch them unless you know what you are doing.
+
+#     Parameters
+#     ----------
+#     dt : float, optional
+#         Time duration for each simulation step in seconds. If none, it will inherit from `SimOptions`. Defaults to None.
+#     gravity : tuple, optional
+#         Gravity force in N/kg. If none, it will inherit from `SimOptions`. Defaults to None.
+#     particle_size : float, optional
+#         Particle diameter in meters. If not given, we will compute `particle_size` based on `grid_density`, where `particle_size` will be linearly proportional to the grid cell size. A reference value is `particle_size = 0.01` for `grid_density = 64`. Defaults to None.
+#     grid_density : float, optional
+#         Number of grid cells per meter. Defaults to 64.
+#     enable_CPIC : bool, optional
+#         Whether to enable CPIC (Compatible Particle-in-Cell) to support coupling with thin objects. Defaults to False.
+#     lower_bound : tuple, shape (3,), optional
+#         Lower bound of the simulation domain. Defaults to (-1.0, -1.0, 0.0).
+#     upper_bound : tuple, shape (3,), optional
+#         Upper bound of the simulation domain. Defaults to (1.0, 1.0, 1.0).
+#     use_sparse_grid : bool, optional
+#         Whether to use sparse grid. Defaults to False. Don't touch unless you know what you are doing.
+#     leaf_block_size : int, optional
+#         Size of the leaf block for sparse mode. Defaults to 8.
+#     """
+
+#     dt: Optional[float] = None
+#     gravity: Optional[tuple] = None
+#     particle_size: Optional[float] = None  # in meters. Will be computed automatically if it's None.
+#     grid_density: float = 64
+#     enable_CPIC: bool = False
+
+#     # These will later be converted to discrete grid bound. The actual grid boundary could be slightly tighter.
+#     lower_bound: tuple = (-1.0, -1.0, 0.0)
+#     upper_bound: tuple = (1.0, 1.0, 1.0)
+
+#     # Sparse computation parameter. Don't touch unless you know what you are doing.
+#     use_sparse_grid: bool = False
+#     leaf_block_size: int = (
+#         8  # NOTE: taichi_elements uses 4, which in our case will hang and crash. Probably due to some memory access issue.
+#     )
+
+#     def __init__(self, **data):
+#         super().__init__(**data)
+#         if not np.all(np.array(self.upper_bound) > np.array(self.lower_bound)):
+#             gs.raise_exception("Invalid pair of upper_bound and lower_bound.")
+
+#         if self.particle_size is None:
+#             self.particle_size = 0.01 * 64.0 / self.grid_density
+
+
 class MPMOptions(Options):
     """
     Options configuring the MPMSolver.
 
     Note
     ----
-    MPM is a hybrid lagrangian-eulerian method for simulating soft materials. In the eulerian phase, it uses a grid representation. The `upper_bound` and `lower_bound` specify the simulation domain, but a safety padding will be added to the actual grid boundary. Therefore, the actual boundary could be slightly tighter than the specified one. Note that the size of the domain affects the performance of the simulation, hence you should set it as tight as possible.
+    MPM is a hybrid lagrangian-eulerian method for simulating soft materials. In the
+    eulerian phase, it uses a grid representation. The `upper_bound` and `lower_bound`
+    specify the simulation domain, but a safety padding will be added to the actual grid
+    boundary. Therefore, the actual boundary could be slightly tighter than the specified
+    one. Note that the size of the domain affects the performance of the simulation,
+    hence you should set it as tight as possible.
 
-    `use_sparse_grid` and `leaf_block_size` are advanced parameters for sparse computation. Don't touch them unless you know what you are doing.
+    `use_sparse_grid` and `leaf_block_size` are advanced parameters for sparse computation.
+    Don't touch them unless you know what you are doing.
 
     Parameters
     ----------
     dt : float, optional
-        Time duration for each simulation step in seconds. If none, it will inherit from `SimOptions`. Defaults to None.
+        Time duration for each simulation step in seconds. If none, it will inherit from
+        `SimOptions`. Defaults to None.
     gravity : tuple, optional
         Gravity force in N/kg. If none, it will inherit from `SimOptions`. Defaults to None.
     particle_size : float, optional
-        Particle diameter in meters. If not given, we will compute `particle_size` based on `grid_density`, where `particle_size` will be linearly proportional to the grid cell size. A reference value is `particle_size = 0.01` for `grid_density = 64`. Defaults to None.
+        Particle diameter in meters. If not given, we compute it from `grid_density`
+        (reference: 0.01 at grid_density=64).
     grid_density : float, optional
         Number of grid cells per meter. Defaults to 64.
     enable_CPIC : bool, optional
-        Whether to enable CPIC (Compatible Particle-in-Cell) to support coupling with thin objects. Defaults to False.
-    lower_bound : tuple, shape (3,), optional
-        Lower bound of the simulation domain. Defaults to (-1.0, -1.0, 0.0).
-    upper_bound : tuple, shape (3,), optional
-        Upper bound of the simulation domain. Defaults to (1.0, 1.0, 1.0).
+        Whether to enable CPIC for coupling with thin objects. Defaults to False.
+    lower_bound, upper_bound : tuple(3,)
+        Simulation domain bounds.
     use_sparse_grid : bool, optional
-        Whether to use sparse grid. Defaults to False. Don't touch unless you know what you are doing.
+        Whether to use sparse grid. Defaults to False.
     leaf_block_size : int, optional
-        Size of the leaf block for sparse mode. Defaults to 8.
+        Leaf block size for sparse mode. Defaults to 8.
+
+    NEW (dynamic particle size)
+    ---------------------------
+    particle_size_growth_rate : float
+        Multiplicative growth rate for the diameter (1/s). Each substep:
+        size <- size * (1 + rate * dt). 0.0 disables growth.
+    particle_size_growth_mode : {'preserve_density','preserve_mass'}
+        If 'preserve_density', per-particle mass scales with volume; if 'preserve_mass',
+        mass stays fixed (density falls as size grows).
+    particle_size_min : float
+        Lower clamp for size.
+    particle_size_max : float | None
+        Optional upper clamp for size.
     """
 
     dt: Optional[float] = None
     gravity: Optional[tuple] = None
-    particle_size: Optional[float] = None  # in meters. Will be computed automatically if it's None.
+    particle_size: Optional[float] = None   # meters; computed if None
     grid_density: float = 64
     enable_CPIC: bool = False
 
-    # These will later be converted to discrete grid bound. The actual grid boundary could be slightly tighter.
+    # domain
     lower_bound: tuple = (-1.0, -1.0, 0.0)
     upper_bound: tuple = (1.0, 1.0, 1.0)
 
-    # Sparse computation parameter. Don't touch unless you know what you are doing.
+    # sparse
     use_sparse_grid: bool = False
-    leaf_block_size: int = (
-        8  # NOTE: taichi_elements uses 4, which in our case will hang and crash. Probably due to some memory access issue.
-    )
+    leaf_block_size: int = 8  # taichi_elements uses 4; 8 avoids hangs here
+
+    # -------- NEW (dynamic particle size) --------
+    particle_size_growth_rate: float = 0.0
+    particle_size_growth_mode: str = "preserve_density"  # or 'preserve_mass'
+    particle_size_min: float = 1e-6
+    particle_size_max: Optional[float] = None
 
     def __init__(self, **data):
         super().__init__(**data)
+
         if not np.all(np.array(self.upper_bound) > np.array(self.lower_bound)):
             gs.raise_exception("Invalid pair of upper_bound and lower_bound.")
 
         if self.particle_size is None:
-            self.particle_size = 0.01 * 64.0 / self.grid_density
+            # reference mapping: size ~ 0.01 when grid_density=64
+            self.particle_size = 0.01 * 64.0 / float(self.grid_density)
 
+        # validate new fields
+        if self.particle_size_growth_mode not in ("preserve_density", "preserve_mass"):
+            gs.raise_exception(
+                f"Unsupported particle_size_growth_mode: {self.particle_size_growth_mode}. "
+                "Use 'preserve_density' or 'preserve_mass'."
+            )
+        if self.particle_size_min <= 0.0:
+            gs.raise_exception("particle_size_min must be > 0.")
+        if (self.particle_size_max is not None) and (self.particle_size_max <= self.particle_size_min):
+            gs.raise_exception("particle_size_max must be > particle_size_min.")
 
 class SPHOptions(Options):
     """
