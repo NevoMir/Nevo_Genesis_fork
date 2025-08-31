@@ -15,7 +15,7 @@ gs.init()
 scene = gs.Scene(
     sim_options = gs.options.SimOptions(
         dt       = 1e-3,
-        substeps = 25,
+        substeps = 2,
         gravity  = (0.0, 0.0, -9.81),
     ),
     # finer grid & bigger vertical span
@@ -48,10 +48,10 @@ carrier1 = scene.add_entity(
     material = gs.materials.MPM.ElastoPlastic(
                 E=2.0e6,            # 2 MPa — typical for ~30–50 kg/m³ rigid PU; adjust with tests
                 nu=0.30,            # closed-cell rigid foams often 0.25–0.35
-                rho=40.0,           # kg/m³ — mid of in-situ 35–50 kg/m³
+                rho=10000.0,           # kg/m³ — mid of in-situ 35–50 kg/m³
                 sampler='pbs',
-                yield_lower=0.05,   # elastic-to-plateau onset ~5% strain
-                yield_higher=0.35,  # plateau ends ~35% strain (densification starts)
+                yield_lower=0.55,   # elastic-to-plateau onset ~5% strain
+                yield_higher=0.85,  # plateau ends ~35% strain (densification starts)
                 use_von_mises=False,
                 # von_mises_yield_stress=1.5e5  # 0.15 MPa — matches EN 826 ≥150 kPa plateau/σ10%
                 ),
@@ -63,7 +63,7 @@ carrier2 = scene.add_entity(
     material = gs.materials.MPM.ElastoPlastic(
                 E=2.0e6,            # 2 MPa — typical for ~30–50 kg/m³ rigid PU; adjust with tests
                 nu=0.30,            # closed-cell rigid foams often 0.25–0.35
-                rho=40.0,           # kg/m³ — mid of in-situ 35–50 kg/m³
+                rho=10000.0,           # kg/m³ — mid of in-situ 35–50 kg/m³
                 sampler='pbs',
                 yield_lower=0.05,   # elastic-to-plateau onset ~5% strain
                 yield_higher=0.35,  # plateau ends ~35% strain (densification starts)
