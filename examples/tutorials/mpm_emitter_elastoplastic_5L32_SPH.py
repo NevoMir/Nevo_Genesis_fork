@@ -28,8 +28,8 @@ gs.init()
 # ─────────────────────────────────────────────────────────────────────────────
 scene = gs.Scene(
     sim_options = gs.options.SimOptions(
-        dt       = 1e-3,
-        substeps = 2,
+        dt       = 5e-3,
+        substeps = 50,
         gravity  = (0.0, 0.0, -9.81),
     ),
     mpm_options = gs.options.MPMOptions(
@@ -60,18 +60,16 @@ ground = scene.add_entity(
 # ─────────────────────────────────────────────────────────────────────────────
 carrier1 = scene.add_entity(
     morph    = gs.morphs.Sphere(radius=0.3, pos=(3.0, 0.0, 1.0)),
-    material = gs.materials.MPM.ElastoPlastic(
-        E=1.0e5, nu=0.30, rho=4000.0, sampler='pbs',
-        yield_lower=0.02, yield_higher=0.05, use_von_mises=False,
+    material = gs.materials.SPH.Liquid(
+        rho=1000.0, stiffness=5.0e4, exponent=7.0,
+        mu=0.005, gamma=0.01, sampler="pbs-32"
     ),
     surface  = gs.surfaces.Default(vis_mode="particle", color=(0.8, 0.05, 0.05)),
 )
 
 carrier2 = scene.add_entity(
     morph    = gs.morphs.Sphere(radius=0.3, pos=(2.0, 0.0, 1.0)),
-    material = gs.materials.MPM.ElastoPlastic(
-        E=1.0e5, nu=0.30, rho=4000.0, sampler='pbs',
-        yield_lower=0.02, yield_higher=0.05, use_von_mises=False,
+    material = gs.materials.SPH.Liquid(
     ),
     surface  = gs.surfaces.Default(vis_mode="particle", color=(0.8, 0.05, 0.05)),
 )
