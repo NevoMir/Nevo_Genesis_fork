@@ -34,7 +34,7 @@ scene = gs.Scene(
         gravity  = (0.0, 0.0, -9.81),
     ),
     mpm_options = gs.options.MPMOptions(
-        lower_bound   = (-4, -4, -1.0),
+        lower_bound   = (-4, -4, -0.5),
         upper_bound   = ( 4,  4,  1.5),  # effective boundary will be slightly tighter
         particle_size = P_SIZE,
     ),
