@@ -1,36 +1,21 @@
 #!/usr/bin/env python3
-# Minimal-overhead instrumentation; matched to "second code" behavior
-# Changes vs your first code:
-#  - sphere-per-step emission (independent of dt)
-#  - spherical carriers (auto-sized radii)
-#  - same ground coupling friction (1000.0)
-#  - headless viewer (show_viewer=False)
+# mpm_liquid_expand_then_viscosify + DRONE FOLLOWER (uses set_pos / set_quat)
 
-import time
 import types
-import math
 import numpy as np
 import genesis as gs
 import genesis.utils.particle as pu
 
 # ======================= 0) Tunables ========================================
-METHOD                   = "MPM"
-SIMULATION_LABEL         = "(1): 5 Layers Structure"
-P_SIZE                   = 0.007              # particle diameter
-DT                       = 1e-3               # sim dt
-SUBSTEPS                 = 5
-GRAV                     = (0.0, 0.0, -9.81)
-DURATION                 = 4.0                # seconds of simulated time
+P_SIZE                   = 0.007          # MPM particle size (grid-linked)
 
-# Emitter (match second code: a sphere per step, volume independent of dt)
-DROPLET_SIZE             = 0.015              # sphere diameter (m) -> radius = 0.0075 m
-EMIT_SPEED               = 5.0                # m/s (velocity of injected particles)
-
-# Expansion/cure staging (same as both scripts)
+# Stage timings
 TAU_EXPAND_S             = 0.15
 TAU_EXPAND_JITTER        = 0.10
 TAU_TO_P1_S              = 0.15
 TAU_TO_P1_JITTER         = 0.00
+
+# Expansion geometry & kinematics
 EXPANSION_RATIO          = 5.0
 EXPAND_RADIUS_MULTIPLIER = 5.0
 MAX_RESAMPLE_TRIES       = 8
@@ -40,7 +25,7 @@ EXPANSION_VEL            = 0.5
 EXPANSION_VEL_JITTER     = 0.4
 VEL_RADIAL_WEIGHT        = 0.85
 
-# Ground & bounds
+# Ground & spawn safety
 GROUND_Z                 = 0.0
 COLLISION_MARGIN         = 0.6 * P_SIZE
 
@@ -48,89 +33,58 @@ COLLISION_MARGIN         = 0.6 * P_SIZE
 RHO_P0                   = 1400.0
 MASS_COMPENSATE          = True
 
-# Drag
+# Drag to tame splashing a bit
 DRAG_LINEAR              = 1.0
 
-# Drone follow (visual only)
+# ===== Drone follow parameters ==============================================
 URDF_PATH = "/home/omenrtx5090/Documents/Aerial_AM_Simulation_Nevo/Drone_files/robot.urdf"
+
+# From your working script: nozzle → origin (base) offset (meters)
 NOZZLE_TO_ORIGIN = np.array([-0.145989, 0.224300, 0.316818], dtype=np.float32)
-NOZZLE_CLEARANCE = np.array([0.0, 0.0, 0.001], dtype=np.float32)
-
-# Auto-sizing heuristics
-PACKING_EFF              = 0.90   # fraction “filled” at spacing p_size
-SAFETY_MARGIN            = 1.30   # headroom for each carrier
-
-# ======================= helpers: emission & sizing ==========================
-def estimate_counts_sphere_per_step(dt, duration, sphere_diam, p_size, exp_ratio,
-                                    tau_expand, tau_to_p1, packing_eff=0.9, margin=1.3):
-    """Particles per step from a filled sphere of diameter sphere_diam."""
-    steps = int(round(duration / dt))
-    r = 0.5 * sphere_diam
-    vol_per_step = (4.0/3.0) * math.pi * r**3
-    per_particle_vol = (p_size ** 3) / max(packing_eff, 1e-6)
-    n_per_step = max(1, int(math.ceil(vol_per_step / per_particle_vol)))
-
-    n_emit_total = n_per_step * steps
-    win_expand_steps = max(1, int(math.ceil(tau_expand / dt)))
-    win_p1_steps     = max(1, int(math.ceil(tau_to_p1 / dt)))
-
-    cap_emit      = int(math.ceil(n_per_step * win_expand_steps * margin))
-    cap_expanded  = int(math.ceil(n_per_step * exp_ratio * win_p1_steps * margin))
-    cap_p1        = int(math.ceil(n_emit_total * exp_ratio * margin))
-    return n_per_step, n_emit_total, cap_emit, cap_expanded, cap_p1
-
-def sphere_radius_for_particles(n_target, p_size, packing_eff=0.9):
-    """Solve r from n ≈ packing_eff * (4/3 π r^3) / p_size^3."""
-    V = (n_target * (p_size ** 3)) / max(packing_eff, 1e-6)
-    r_cubed = (3.0 * V) / (4.0 * math.pi)
-    r = max((r_cubed ** (1.0/3.0)), 1.5 * p_size)
-    return r
+NOZZLE_CLEARANCE = np.array([0.0, 0.0, 0.001], dtype=np.float32)  # 1 mm above emitter
 
 # ======================= 1) Boot Genesis ====================================
 gs.init()
 scene = gs.Scene(
-    sim_options = gs.options.SimOptions(dt=DT, substeps=SUBSTEPS, gravity=GRAV),
+    sim_options = gs.options.SimOptions(dt=1e-3, substeps=5, gravity=(0.0, 0.0, -9.81)),
     mpm_options = gs.options.MPMOptions(
-        lower_bound   = (-0.4, -0.4, -0.1),
-        upper_bound   = ( 0.4,  0.4,  0.6),
+        lower_bound   = (-1, -1, -0.1),
+        upper_bound   = ( 1,  1,  1.6),
         particle_size = P_SIZE,
     ),
-    viewer_options = gs.options.ViewerOptions(res=(2000, 1400), max_FPS=None),
-    show_viewer    = True,   # match second code (headless)
+    viewer_options = gs.options.ViewerOptions(res=(1000, 700)),#(res=(1120, 760)),
+    show_viewer    = True,
 )
 
-# ======================= 2) Ground (match second code friction) =============
+# ======================= 2) Ground ==========================================
 _ = scene.add_entity(
     morph=gs.morphs.Plane(),
-    material=gs.materials.Rigid(needs_coup=True, coup_friction=1000.0, coup_softness=0.001, coup_restitution=0.0),
+    material=gs.materials.Rigid(
+        needs_coup=True, coup_friction=1000.0, coup_softness=0.001, coup_restitution=0.0
+    ),
     surface=gs.surfaces.Default(color=(0.50, 0.50, 0.50)),
 )
 
-# ======= 2.5) Auto-size the three spherical carriers from emission params ===
-n_per_step, n_emit_total, cap_emit, cap_expanded, cap_p1 = estimate_counts_sphere_per_step(
-    DT, DURATION, DROPLET_SIZE, P_SIZE, EXPANSION_RATIO, TAU_EXPAND_S, TAU_TO_P1_S,
-    PACKING_EFF, SAFETY_MARGIN
-)
-r_emit     = sphere_radius_for_particles(cap_emit,     P_SIZE, PACKING_EFF)
-r_expanded = sphere_radius_for_particles(cap_expanded, P_SIZE, PACKING_EFF)
-r_p1       = sphere_radius_for_particles(cap_p1,       P_SIZE, PACKING_EFF)
-
-# ======================= 3) Carriers (Spheres like second code) =============
+# ======================= 3) Pools ===========================================
+POOL_RADIUS_EMIT = 0.15
 rho_expanded = (RHO_P0 / EXPANSION_RATIO) if MASS_COMPENSATE else RHO_P0
 
 P0_emit = scene.add_entity(
-    morph    = gs.morphs.Sphere(radius=r_emit, pos=(0.0, 0.0, 0.25)),
+    morph    = gs.morphs.Sphere(radius=POOL_RADIUS_EMIT, pos=(0.0, 0.0, 0.5)),
     material = gs.materials.MPM.Liquid(viscous=False, rho=RHO_P0),
     surface  = gs.surfaces.Default(vis_mode="particle", color=(0.15, 0.65, 1.00)),
 )
+
+POOL_RADIUS_EXP = POOL_RADIUS_EMIT * (EXPANSION_RATIO ** (1/3))
 P0_expanded = scene.add_entity(
-    morph    = gs.morphs.Sphere(radius=r_expanded, pos=(0.0, 0.0, 0.25)),
+    morph    = gs.morphs.Sphere(radius=POOL_RADIUS_EXP, pos=(0.0, 0.0, 0.5)),
     material = gs.materials.MPM.Liquid(viscous=False, rho=rho_expanded),
     surface  = gs.surfaces.Default(vis_mode="particle", color=(0.98, 0.78, 0.15)),
 )
+
 P1_viscous = scene.add_entity(
-    morph    = gs.morphs.Sphere(radius=r_p1, pos=(0.0, 0.0, 0.25)),
-    material = gs.materials.MPM.Liquid(viscous=True,  rho=rho_expanded),
+    morph    = gs.morphs.Sphere(radius=POOL_RADIUS_EXP * 1.5, pos=(0.0, 0.0, 0.50)),
+    material = gs.materials.MPM.Liquid(viscous=True, rho=rho_expanded),
     surface  = gs.surfaces.Default(vis_mode="particle", color=(0.20, 0.95, 0.25)),
 )
 
@@ -175,16 +129,10 @@ birth_expanded = None
 tau_emit_noise     = None
 tau_to_p1_noise    = None
 
-# instrumentation counters (ever-activated)
-activated_emit_total     = 0
-activated_expanded_total = 0
-activated_p1_total       = 0
-
-def emit_fixed(self, droplet_size=DROPLET_SIZE,
+def emit_fixed(self, droplet_shape="sphere", droplet_size=0.01,
                pos=(0.0,0.0,1.0), direction=(0.0,0.0,-1.0),
-               speed=EMIT_SPEED, p_size=None, **kwargs):
-    """Match second code: emit a SPHERE every step; velocity given by 'speed'."""
-    global emit_head, step, activated_emit_total
+               speed=0.6, p_size=None, **kwargs):
+    global emit_head
     B = getattr(scene, "B", getattr(scene.sim, "_B", 1))
 
     direction = np.asarray(direction, dtype=gs.np_float)
@@ -192,9 +140,10 @@ def emit_fixed(self, droplet_size=DROPLET_SIZE,
 
     p_size = P_SIZE if p_size is None else p_size
     pts_local = pu.sphere_to_particles(
-        p_size=p_size, radius=droplet_size * 0.5, sampler=self._entity.sampler
+        p_size=p_size,
+        radius=droplet_size * 0.5,
+        sampler=self._entity.sampler,
     ).astype(gs.np_float, copy=False)
-
     pts_world = pts_local + np.asarray(pos, dtype=gs.np_float)
     n         = pts_world.shape[0]
 
@@ -203,8 +152,6 @@ def emit_fixed(self, droplet_size=DROPLET_SIZE,
     vels      = np.tile(v_single, (B, n, 1))
 
     def stamp_emit(start, count):
-        global activated_emit_total
-        activated_emit_total += int(count)
         birth_emit[start:start+count] = step
         if TAU_EXPAND_JITTER > 0.0:
             tau_emit_noise[start:start+count] = np.random.uniform(0.0, TAU_EXPAND_JITTER, size=(count,))
@@ -216,17 +163,26 @@ emitter.emit = types.MethodType(emit_fixed, emitter)
 if DRAG_LINEAR > 0.0:
     scene.add_force_field(gs.force_fields.Drag(linear=DRAG_LINEAR, quadratic=0.0))
 
-# ======================= 4.5) Drone (visual only) ===========================
+# ======================= 4.5) Add the drone (follows emitter) ===============
 drone = scene.add_entity(
-    morph=gs.morphs.URDF(file=URDF_PATH, fixed=False, pos=(0.0, 0.0, 0.5)),
+    morph=gs.morphs.URDF(
+        file=URDF_PATH,
+        fixed=False,
+        pos=(0.0, 0.0, 0.5),   # temporary; we’ll update every step
+    ),
     material=gs.materials.Rigid(rho=800.0),
 )
+
 def place_drone_at_emitter(emit_pos_xyz):
+    """
+    Keep drone upright; move so nozzle sits 1 mm above the emitter.
+    Uses set_pos / set_quat (identity) as in your working script.
+    """
     emit_pos = np.asarray(emit_pos_xyz, dtype=np.float32)
     nozzle_world = emit_pos + NOZZLE_CLEARANCE
-    origin_world = nozzle_world + NOZZLE_TO_ORIGIN
+    origin_world = nozzle_world + NOZZLE_TO_ORIGIN  # origin = nozzle + (nozzle→origin)
     drone.set_pos(tuple(origin_world))
-    drone.set_quat((1.0, 0.0, 0.0, 0.0))
+    drone.set_quat((1.0, 0.0, 0.0, 0.0))  # identity quaternion, stays “straight”
 
 # ======================= 5) Build & deactivate ==============================
 scene.build()
@@ -242,21 +198,26 @@ for e in (P0_emit, P0_expanded, P1_viscous):
 
 birth_emit     = np.full((P0_emit.n_particles,),     -1, dtype=np.int32)
 birth_expanded = np.full((P0_expanded.n_particles,), -1, dtype=np.int32)
-if TAU_EXPAND_JITTER > 0.0:  tau_emit_noise  = np.zeros((P0_emit.n_particles,), dtype=np.float32)
-if TAU_TO_P1_JITTER > 0.0:   tau_to_p1_noise = np.zeros((P0_expanded.n_particles,), dtype=np.float32)
+
+if TAU_EXPAND_JITTER > 0.0:
+    tau_emit_noise = np.zeros((P0_emit.n_particles,), dtype=np.float32)
+if TAU_TO_P1_JITTER > 0.0:
+    tau_to_p1_noise = np.zeros((P0_expanded.n_particles,), dtype=np.float32)
 
 # Initial placement
 place_drone_at_emitter((0.0, 0.0, 0.5))
 
-# ======================= 6) Utils ===========================================
+# ======================= 6) Helpers =========================================
 def random_points_in_sphere(K, R):
     u   = np.random.rand(K).astype(np.float32)
     r   = (R * (u ** (1.0/3.0))).astype(np.float32)[:, None]
     v   = np.random.normal(size=(K,3)).astype(np.float32)
     v  /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-8)
     return r * v
+
 def in_bounds_mask(points, lower, upper):
     return np.all((points >= lower[None, :]) & (points <= upper[None, :]), axis=1)
+
 def active_count(entity):
     n = entity.n_particles
     d3  = np.empty((B, n, 3), dtype=np.float32)
@@ -268,7 +229,7 @@ def active_count(entity):
 
 # ======================= 7) Stage A: expansion ===============================
 def promote_expand(step, dt):
-    global expanded_head, activated_expanded_total
+    global expanded_head
 
     nE = P0_emit.n_particles
     posE = np.empty((B, nE, 3), dtype=np.float32)
@@ -293,7 +254,7 @@ def promote_expand(step, dt):
 
     pos_blocks, vel_blocks = [], []
 
-    base_K  = int(math.floor(EXPANSION_RATIO))
+    base_K  = int(np.floor(EXPANSION_RATIO))
     extra_p = EXPANSION_RATIO - base_K
     R_samp  = EXPAND_RADIUS_MULTIPLIER * P_SIZE
 
@@ -315,7 +276,8 @@ def promote_expand(step, dt):
             cand[:, 2] = np.maximum(cand[:, 2], GROUND_Z + COLLISION_MARGIN)
             inb = in_bounds_mask(cand, lower, upper)
             if np.any(inb):
-                kept_pos.append(cand[inb]); kept_dir.append(dirs[inb])
+                kept_pos.append(cand[inb])
+                kept_dir.append(dirs[inb])
             tries += 1
 
         if len(kept_pos) == 0:
@@ -333,7 +295,8 @@ def promote_expand(step, dt):
 
         cand_B = np.tile(cand_kept[None, :, :], (B, 1, 1))
         vel_B  = np.tile(v_kept[None, :, :],    (B, 1, 1))
-        pos_blocks.append(cand_B); vel_blocks.append(vel_B)
+        pos_blocks.append(cand_B)
+        vel_blocks.append(vel_B)
 
     if len(pos_blocks) == 0:
         return
@@ -342,22 +305,23 @@ def promote_expand(step, dt):
     vel_out = np.concatenate(vel_blocks, axis=1)
 
     def stamp_expanded(start, count):
-        global activated_expanded_total
-        activated_expanded_total += int(count)
         birth_expanded[start:start+count] = step
         if TAU_TO_P1_JITTER > 0.0:
             tau_to_p1_noise[start:start+count] = np.random.uniform(0.0, TAU_TO_P1_JITTER, size=(count,))
 
     expanded_head = _push_block(P0_expanded, expanded_head, pos_out, vel_out, stamp_expanded)
 
-    act0 = actE[0]; act0[idxs] = gs.INACTIVE
-    P0_emit.set_active_arr(scene.sim.cur_substep_local, gs.tensor(np.tile(act0[None], (B, 1)).astype(np.int32)))
+    act0 = actE[0]
+    act0[idxs] = gs.INACTIVE
+    act_allB = np.tile(act0[None], (B, 1)).astype(np.int32)
+    P0_emit.set_active_arr(scene.sim.cur_substep_local, gs.tensor(act_allB))
     birth_emit[idxs] = -1
-    if TAU_EXPAND_JITTER > 0.0: tau_emit_noise[idxs] = 0.0
+    if TAU_EXPAND_JITTER > 0.0:
+        tau_emit_noise[idxs] = 0.0
 
-# ======================= 8) Convert to P1 ===================================
+# ======================= 8) Stage B: convert to P1 ===========================
 def promote_to_p1(step, dt):
-    global p1_head, activated_p1_total
+    global p1_head
 
     nX = P0_expanded.n_particles
     posX = np.empty((B, nX, 3), dtype=np.float32)
@@ -371,31 +335,33 @@ def promote_to_p1(step, dt):
     ages = (step - birth_expanded) * dt
     tau  = TAU_TO_P1_S if TAU_TO_P1_JITTER <= 0.0 else (TAU_TO_P1_S + (tau_to_p1_noise if tau_to_p1_noise is not None else 0.0))
     due  = (birth_expanded >= 0) & (ages >= tau)
-    idxs = np.nonzero((actX[0] == gs.ACTIVE) & due)[0]
-    if idxs.size == 0: return
+    mask = (actX[0] == gs.ACTIVE) & due
+    idxs = np.nonzero(mask)[0]
+    if idxs.size == 0:
+        return
 
     pos_sel = posX[:, idxs, :]
     vel_sel = velX[:, idxs, :]
 
-    def stamp_p1(start, count):
-        global activated_p1_total
-        activated_p1_total += int(count)
+    p1_head = _push_block(P1_viscous, p1_head, pos_sel, vel_sel, stamp_fn=None)
 
-    p1_head = _push_block(P1_viscous, p1_head, pos_sel, vel_sel, stamp_fn=stamp_p1)
-
-    act0 = actX[0]; act0[idxs] = gs.INACTIVE
-    P0_expanded.set_active_arr(scene.sim.cur_substep_local, gs.tensor(np.tile(act0[None], (B, 1)).astype(np.int32)))
+    act0 = actX[0]
+    act0[idxs] = gs.INACTIVE
+    act_allB = np.tile(act0[None], (B, 1)).astype(np.int32)
+    P0_expanded.set_active_arr(scene.sim.cur_substep_local, gs.tensor(act_allB))
     birth_expanded[idxs] = -1
-    if TAU_TO_P1_JITTER > 0.0: tau_to_p1_noise[idxs] = 0.0
+    if TAU_TO_P1_JITTER > 0.0:
+        tau_to_p1_noise[idxs] = 0.0
 
-# ======================= 9) Demo loop =======================================
+# ======================= 9) Demo loop + DRONE FOLLOW ========================
+duration    = 4.0
 dt          = scene.sim.dt
-steps_total = int(DURATION / dt)
+steps_total = int(duration / dt)
 
 radius = 0.22
-omega  = 2 * np.pi / DURATION
+omega  = 2 * np.pi / duration
+next_report_step = 0
 
-t_wall_start = time.perf_counter()
 for step in range(steps_total):
     t      = step * dt * 4
     angle  = omega * t
@@ -404,67 +370,26 @@ for step in range(steps_total):
     z_emit = 0.1 + 0.04 * (angle / (2*np.pi))
 
     emit_pos = (x_off, y_off, z_emit)
+
+    # keep the drone nozzle 1 mm above the emitter
     place_drone_at_emitter(emit_pos)
 
     emitter.emit(
-        droplet_size  = DROPLET_SIZE,   # sphere per step
+        droplet_shape = "square",
+        droplet_size  = 0.015,
         pos           = emit_pos,
         direction     = (0.0, 0.0, -1.0),
-        speed         = EMIT_SPEED,
+        speed         = 5.0,
         p_size        = P_SIZE,
     )
 
     promote_expand(step, dt)
     promote_to_p1(step, dt)
 
+    if step >= next_report_step:
+        print(f"[t={step*dt:5.2f}s] P0_emit={active_count(P0_emit)}  P0_expanded={active_count(P0_expanded)}  P1={active_count(P1_viscous)}")
+        next_report_step = step + int(0.5 / dt)
+
     scene.step()
-t_wall_end = time.perf_counter()
 
-# ======================= 10) Summary ========================================
-wall_time_s = (t_wall_end - t_wall_start)
-sim_time_s  = steps_total * dt
-avg_fps     = steps_total / wall_time_s if wall_time_s > 0 else float("nan")
-real_over_sim = wall_time_s / sim_time_s if sim_time_s > 0 else float("nan")
-
-def active_count_total():
-    return active_count(P0_emit) + active_count(P0_expanded) + active_count(P1_viscous)
-
-active_total          = active_count_total()
-activated_total_all   = activated_emit_total + activated_expanded_total + activated_p1_total
-sampled_capacity_all  = P0_emit.n_particles + P0_expanded.n_particles + P1_viscous.n_particles  # total slots
-
-def try_get_grid_density(sc):
-    try:
-        gd = getattr(sc._sim.mpm_solver, "grid_density", None)
-        return float(gd) if gd is not None else None
-    except Exception:
-        return None
-
-grid_density = try_get_grid_density(scene)
-grid_density_str = f"{grid_density:.6g}" if grid_density else "—"
-
-print("\n=== Simulation Summary (for table) ===")
-print(f"Method: {METHOD}")
-print(f"Simulation: {SIMULATION_LABEL}")
-print(f"# of particles (active now / ever activated / sampled capacity): "
-      f"{active_total} / {activated_total_all} / {sampled_capacity_all}")
-print(f"Particle size (m): {P_SIZE:.6g}")
-print(f"Δt (s): {scene.sim.dt:.6g}   Substeps: {scene.sim.substeps}")
-print(f"Grid density (cells/m): {grid_density_str}")
-print(f"Avg FPS: {avg_fps:.3f}")
-print(f"Wall time: {wall_time_s:.3f} s   Sim time: {sim_time_s:.3f} s   Wall/Sim: {real_over_sim:.3f}")
-
-# LaTeX row for your big table (EOS/SPH fields N/A here)
-latex_row = (
-    f"{METHOD} & {SIMULATION_LABEL} & "
-    f"{activated_total_all} & "
-    f"{P_SIZE:.6g} & "
-    f"{scene.sim.dt:.6g} & "
-    f"{scene.sim.substeps} & "
-    f"{grid_density_str} & "
-    f"— & — & — & — & "
-    f"{avg_fps:.3f} \\\\"
-)
-print("\nLaTeX row:\n" + latex_row)
-
-# No viewer: match second code
+scene.viewer.run()
