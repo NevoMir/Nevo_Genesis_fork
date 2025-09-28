@@ -42,8 +42,8 @@ scene = gs.Scene(
         gravity  = (0.0, 0.0, -9.81),
     ),
     mpm_options = gs.options.MPMOptions(
-        lower_bound   = (-4.5, -4.5,  0.0),
-        upper_bound   = ( 4.5,  4.5,  2),
+        lower_bound   = (-1, -1,  0.0),
+        upper_bound   = ( 1,  1,  1),
         particle_size = 0.03,
     ),
     viewer_options = gs.options.ViewerOptions(res=(800, 600)),
@@ -59,7 +59,7 @@ scene.add_entity(
 
 # ── 4) Carrier sphere ───────────────────────────────────────────────────────
 carrier = scene.add_entity(
-    morph    = gs.morphs.Sphere(radius=0.5, pos=(3.0, 0.0, 1.0)),
+    morph    = gs.morphs.Sphere(radius=0.3, pos=(0.0, 0.0, 0.5)),
     material = gs.materials.MPM.ElastoPlastic(),
     surface  = gs.surfaces.Default(vis_mode="particle", color=(0.3, 0.15, 0.05)),
 )
@@ -67,7 +67,7 @@ carrier = scene.add_entity(
 # ── 5) Emitter ──────────────────────────────────────────────────────────────
 emitter = scene.add_emitter(
     material      = gs.materials.MPM.Liquid(),   # dummy to bypass v-vert check
-    max_particles = 50_000,
+    max_particles = 500_000,
     surface       = gs.surfaces.Default(vis_mode="particle", color=(0.8, 0.3, 0.1)),
 )
 emitter.set_entity(carrier)
