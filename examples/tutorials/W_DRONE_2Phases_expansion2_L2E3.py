@@ -72,6 +72,7 @@ UPPER_BOUND              = ( 0.6,  0.6,  0.65)
 # ======================= helpers: emission & sizing ==========================
 def estimate_counts_sphere_per_step(dt, duration, sphere_diam, p_size, exp_ratio,
                                     tau_expand, tau_to_p1, packing_eff=0.9, margin=1.3):
+    """Estimate per-step emission count and ring-buffer capacities for emit, expanded, and P1 phases."""
     steps = int(round(duration / dt))
     r = 0.5 * sphere_diam
     vol_per_step = (4.0/3.0) * math.pi * r**3
@@ -88,12 +89,14 @@ def estimate_counts_sphere_per_step(dt, duration, sphere_diam, p_size, exp_ratio
     return n_per_step, n_emit_total, cap_emit, cap_expanded, cap_p1
 
 def sphere_radius_for_particles(n_target, p_size, packing_eff=0.9):
+    """Compute minimal sphere radius to hold n_target particles at given packing efficiency."""
     V = (n_target * (p_size ** 3)) / max(packing_eff, 1e-6)
     r_cubed = (3.0 * V) / (4.0 * math.pi)
     r = max((r_cubed ** (1.0/3.0)), 1.5 * p_size)
     return r
 
 def jitter_direction(base_dir: np.ndarray, jitter_deg: float) -> np.ndarray:
+    """Return a unit direction that is base_dir perturbed by a small angular jitter in degrees."""
     d = base_dir.astype(np.float32)
     d /= (np.linalg.norm(d) + 1e-12)
     if jitter_deg <= 0.0:
@@ -105,6 +108,7 @@ def jitter_direction(base_dir: np.ndarray, jitter_deg: float) -> np.ndarray:
     return dj
 
 def random_points_in_sphere(K, R):
+    """Sample K points uniformly inside a sphere of radius R."""
     u   = np.random.rand(K).astype(np.float32)
     r   = (R * (u ** (1.0/3.0))).astype(np.float32)[:, None]
     v   = np.random.normal(size=(K,3)).astype(np.float32)
@@ -112,6 +116,7 @@ def random_points_in_sphere(K, R):
     return r * v
 
 def in_bounds_mask(points, lower, upper):
+    """Boolean mask indicating which points lie within [lower, upper] bounds (inclusive)."""
     return np.all((points >= lower[None, :]) & (points <= upper[None, :]), axis=1)
 
 # ======================= 1) Boot Genesis ====================================
@@ -177,6 +182,7 @@ emitter = scene.add_emitter(
 emitter.set_entity(P0_emit)
 
 def _write_block(entity, start_idx, pts_world, vels):
+    """Write positions/velocities into an entity’s particle buffer at start_idx and mark them active."""
     n   = pts_world.shape[1]
     f   = scene.sim.cur_substep_local
     sol = entity._solver
@@ -185,6 +191,7 @@ def _write_block(entity, start_idx, pts_world, vels):
     sol._kernel_set_particles_active(f, entity.particle_start + start_idx, n, gs.ACTIVE)
 
 def _push_block(entity, head, pts_world, vels, stamp_fn=None):
+    """Ring-buffer insert for a block of particles, handling wraparound and optional stamping; returns new head."""
     cap = entity.n_particles
     n   = pts_world.shape[1]
     rem = cap - head
@@ -217,7 +224,7 @@ activated_p1_total       = 0
 def emit_fixed(self, droplet_size=DROPLET_SIZE,
                pos=(0.0,0.0,1.0), base_direction=EMIT_DIR_BASE,
                speed=EMIT_SPEED, p_size=None, **kwargs):
-    """Emit a SPHERE every step with small direction jitter (deg)."""
+    """Emit a sphere of particles each step with small direction jitter; stamp birth time and optional jitter."""
     global emit_head, step, activated_emit_total
     B = getattr(scene, "B", getattr(scene.sim, "_B", 1))
 
@@ -253,6 +260,7 @@ drone = scene.add_entity(
     material=gs.materials.Rigid(rho=800.0),
 )
 def place_drone_at_emitter(emit_pos_xyz):
+    """Place the visual drone so its nozzle aligns with the current emitter position."""
     emit_pos = np.asarray(emit_pos_xyz, dtype=np.float32)
     nozzle_world = emit_pos + NOZZLE_CLEARANCE
     origin_world = nozzle_world + NOZZLE_TO_ORIGIN
@@ -264,6 +272,7 @@ scene.build()
 B = getattr(scene, "B", getattr(scene.sim, "_B", 1))
 
 def deactivate_all(entity):
+    """Deactivate all particles for the given entity across batches."""
     n = entity.n_particles
     act = np.full((B, n), gs.INACTIVE, dtype=np.int32)
     entity.set_active_arr(scene.sim.cur_substep_local, gs.tensor(act))
@@ -278,6 +287,7 @@ if TAU_TO_P1_JITTER > 0.0:   tau_to_p1_noise = np.zeros((P0_expanded.n_particles
 
 # ======================= 6) Expansion =======================================
 def promote_expand(step, dt):
+    """Promote aged emit particles to expanded phase by spawning ~expansion_ratio clones with radial/random impulse."""
     global expanded_head, activated_expanded_total
 
     nE = P0_emit.n_particles
@@ -375,6 +385,7 @@ def promote_expand(step, dt):
 
 # ======================= 7.5) Convert to P1 (curing) ========================
 def promote_to_p1(step, dt):
+    """Promote aged expanded particles to P1 (solid/viscoplastic) while preserving positions and velocities."""
     global p1_head, activated_p1_total
 
     nX = P0_expanded.n_particles
@@ -448,6 +459,7 @@ avg_fps     = steps_total / wall_time_s if wall_time_s > 0 else float("nan")
 real_over_sim = wall_time_s / sim_time_s if sim_time_s > 0 else float("nan")
 
 def active_count(entity):
+    """Count currently active particles for the given entity."""
     n = entity.n_particles
     B_local = getattr(scene, "B", getattr(scene.sim, "_B", 1))
     d3  = np.empty((B_local, n, 3), dtype=np.float32)
@@ -471,6 +483,7 @@ bbox_edges = np.maximum(ub - lb, 0.0)
 bbox_volume = float(bbox_edges[0] * bbox_edges[1] * bbox_edges[2])
 
 def try_get_grid_density(sc):
+    """Attempt to read grid density from the MPM solver; return None if unavailable."""
     try:
         gd = getattr(sc._sim.mpm_solver, "grid_density", None)
         return float(gd) if gd is not None else None
